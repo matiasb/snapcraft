@@ -381,8 +381,28 @@ def sign_build(snap_filename, key_name=None, local=False):
             'Build assertion {} pushed to the Store.'.format(snap_build_path))
 
 
-def push(snap_filename, release_channels=None):
-    """Push a snap_filename to the store.
+def update_metadata(snap_yaml, force):
+    """Update metadata in the server."""
+    # get the metadata from the snap
+    metadata = {
+        'summary': snap_yaml['summary'],
+        'description': snap_yaml['description'],
+    }
+
+    # other snap info
+    snap_name = snap_yaml['name']
+
+    # hit the server
+    store = storeapi.StoreClient()
+    with _requires_login():
+        store.update_metadata(snap_name, metadata, force)
+
+    logger.info("The metadata has been updated")
+
+
+def push(snap_filename, release_channels=None,
+         only_metadata=False, force_metadata=False):
+    """Push a snap_filename to the store (or just its metadata).
 
     If a cached snap is available, a delta will be generated from
     the cached snap to the new target snap and uploaded instead. In the
@@ -391,8 +411,22 @@ def push(snap_filename, release_channels=None):
 
     If release_channels is defined it also releases it to those channels if the
     store deems the uploaded snap as ready to release.
+
+    If only_metadata is True it will just send the metadata; otherwise the
+    whole process is done (including sending the metadata after sending the
+    snap binary).
+
+    force_metadata is passed to the update_metadata function directly; if True
+    it will force the local metadata into the Store, ignoring any possible
+    conflict.
     """
     snap_yaml = _get_data_from_snap_file(snap_filename)
+    if only_metadata:
+        logger.info("Updating metadata in the Store (force=%s)",
+                    force_metadata)
+        update_metadata(snap_yaml, force_metadata)
+        return
+
     snap_name = snap_yaml['name']
     store = storeapi.StoreClient()
 
@@ -423,16 +457,14 @@ def push(snap_filename, release_channels=None):
     else:
         result = _push_snap(snap_name, snap_filename)
 
-    # This is workaround until LP: #1599875 is solved
-    if 'revision' in result:
-        logger.info('Revision {!r} of {!r} created.'.format(
-            result['revision'], snap_name))
+    logger.info('Revision {!r} of {!r} created.'.format(
+        result['revision'], snap_name))
 
-        snap_cache.cache(snap_filename=snap_filename)
-        snap_cache.prune(deb_arch=arch,
-                         keep_hash=calculate_sha3_384(snap_filename))
-    else:
-        logger.info('Pushing {!r}'.format(snap_name))
+    snap_cache.cache(snap_filename=snap_filename)
+    snap_cache.prune(deb_arch=arch,
+                     keep_hash=calculate_sha3_384(snap_filename))
+
+    update_metadata(snap_yaml, force_metadata)
 
     if release_channels:
         release(snap_name, result['revision'], release_channels)

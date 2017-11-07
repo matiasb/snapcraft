@@ -1,6 +1,6 @@
 # -*- Mode:Python; indent-tabs-mode:nil; tab-width:4 -*-
 #
-# Copyright (C) 2016-2017 Canonical Ltd
+# Copyright 2016-2017 Canonical Ltd
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 3 as
@@ -377,6 +377,45 @@ class StoreReleaseError(StoreError):
             fmt = '{}'.format(response)
 
         return fmt
+
+
+class StoreMetadataError(StoreError):
+
+    __FMT_NOT_REGISTERED = (
+        'Sorry, try `snapcraft register {snap_name}` before trying to '
+        'update metadata.')
+
+    fmt = 'Received {status_code!r}: {text!r}'
+
+    def __init__(self, snap_name, response, metadata):
+        try:
+            response_json = response.json()
+        except (AttributeError, JSONDecodeError):
+            response_json = {}
+
+        if response.status_code == 404:
+            self.fmt = self.__FMT_NOT_REGISTERED
+        elif response.status_code == 409:
+            conflicts = [(error['extra']['name'], error)
+                         for error in response_json['error_list']
+                         if error['code'] == 'conflict']
+            parts = ["Metadata not updated!"]
+            for field_name, error in sorted(conflicts):
+                sent = metadata.get(field_name)
+                parts.extend((
+                    "Conflict in {!r} field:".format(field_name),
+                    "    In snapcraft.yaml: {!r}".format(sent),
+                    "    In the Store:      {!r}".format(error['message']),
+                ))
+            parts.extend((
+                "You can repeat the command with --force-metadata",
+                "to force the local values into the Store"))
+            self.fmt = "\n".join(parts)
+        elif 'error_list' in response_json:
+            response_json['text'] = response_json['error_list'][0]['message']
+
+        super().__init__(snap_name=snap_name, status_code=response.status_code,
+                         **response_json)
 
 
 class StoreValidationError(StoreError):
