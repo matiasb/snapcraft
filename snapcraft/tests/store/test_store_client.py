@@ -17,6 +17,7 @@
 import json
 import logging
 import os
+import tempfile
 from textwrap import dedent
 from unittest import mock
 
@@ -1389,4 +1390,69 @@ class UpdateMetadataTestCase(StoreTestCase):
         metadata = {'test-conflict': 'value'}
         # force the update, even on conflicts!
         result = self.client.update_metadata('basic', metadata, True)
+        self.assertIsNone(result)
+
+
+class UpdateBinaryMetadataTestCase(StoreTestCase):
+
+    def setUp(self):
+        super().setUp()
+        self.fake_logger = fixtures.FakeLogger(level=logging.DEBUG)
+        self.useFixture(self.fake_logger)
+
+    def test_requires_login(self):
+        self.assertRaises(
+            errors.InvalidCredentialsError,
+            self.client.update_binary_metadata, 'basic', {}, False)
+
+    def test_refreshes_macaroon(self):
+        self.client.login('dummy', 'test correct password')
+        self.fake_store.needs_refresh = True
+        with tempfile.NamedTemporaryFile(suffix='ok') as f:
+            metadata = {'icon': f}
+            self.client.update_binary_metadata('basic', metadata, False)
+        self.assertFalse(self.fake_store.needs_refresh)
+
+    def test_invalid_data(self):
+        self.client.login('dummy', 'test correct password')
+        with tempfile.NamedTemporaryFile(suffix='invalid') as f:
+            metadata = {'icon': f}
+            raised = self.assertRaises(
+                errors.StoreMetadataError,
+                self.client.update_binary_metadata, 'basic', metadata, False)
+        self.assertThat(str(raised), Equals(
+            "Received 400: 'Invalid field: icon'"))
+
+    def test_all_ok(self):
+        self.client.login('dummy', 'test correct password')
+        with tempfile.NamedTemporaryFile(suffix='ok') as f:
+            metadata = {'icon': f}
+            result = self.client.update_binary_metadata(
+                'basic', metadata, False)
+        self.assertIsNone(result)
+
+    def test_conflicting_simple_normal(self):
+        self.client.login('dummy', 'test correct password')
+        with tempfile.NamedTemporaryFile(suffix='conflict') as f:
+            filename = os.path.basename(f.name)
+            metadata = {'icon': f}
+            raised = self.assertRaises(
+                errors.StoreMetadataError,
+                self.client.update_binary_metadata, 'basic', metadata, False)
+        should = ("""
+            Metadata not updated!
+            Conflict in 'icon' field:
+                In snapcraft.yaml: '{}'
+                In the Store:      'original-icon'
+            You can repeat the push with --only-metadata and --force-metadata to force the local values into the Store
+        """).format(filename) # NOQA
+        self.assertThat(str(raised), Equals(dedent(should).strip()))
+
+    def test_conflicting_force(self):
+        self.client.login('dummy', 'test correct password')
+        with tempfile.NamedTemporaryFile(suffix='conflict') as f:
+            metadata = {'icon': f}
+            # force the update, even on conflicts!
+            result = self.client.update_binary_metadata(
+                'basic', metadata, True)
         self.assertIsNone(result)

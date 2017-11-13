@@ -63,6 +63,27 @@ def _get_data_from_snap_file(snap_path):
     return snap_yaml
 
 
+@contextmanager
+def _get_icon_from_snap_file(snap_path):
+    icon_file = None
+    with tempfile.TemporaryDirectory() as temp_dir:
+        output = subprocess.check_output(
+            ['unsquashfs', '-d',
+             os.path.join(temp_dir, 'squashfs-root'),
+             snap_path, '-e', 'meta/gui'])
+        logger.debug(output)
+        for extension in ('png', 'svg'):
+            icon_name = 'icon.{}'.format(extension)
+            icon_path = os.path.join(
+                temp_dir, 'squashfs-root', 'meta/gui', icon_name)
+            if os.path.exists(icon_path):
+                icon_file = open(icon_path, 'rb')
+                break
+        yield icon_file
+        if icon_file is not None:
+            icon_file.close()
+
+
 def _fail_login(msg=''):
     echo.error(msg)
     echo.error('Login failed.')
@@ -381,7 +402,7 @@ def sign_build(snap_filename, key_name=None, local=False):
             'Build assertion {} pushed to the Store.'.format(snap_build_path))
 
 
-def update_metadata(snap_yaml, force):
+def update_metadata(snap_yaml, icon, force):
     """Update metadata in the server."""
     # get the metadata from the snap
     metadata = {
@@ -396,6 +417,8 @@ def update_metadata(snap_yaml, force):
     store = storeapi.StoreClient()
     with _requires_login():
         store.update_metadata(snap_name, metadata, force)
+        metadata = {'icon': icon}
+        store.update_binary_metadata(snap_name, metadata, force)
 
     logger.info("The metadata has been updated")
 
@@ -424,7 +447,8 @@ def push(snap_filename, release_channels=None,
     if only_metadata:
         logger.info("Updating metadata in the Store (force=%s)",
                     force_metadata)
-        update_metadata(snap_yaml, force_metadata)
+        with _get_icon_from_snap_file(snap_filename) as icon:
+            update_metadata(snap_yaml, icon, force_metadata)
         return
 
     snap_name = snap_yaml['name']
@@ -464,7 +488,8 @@ def push(snap_filename, release_channels=None,
     snap_cache.prune(deb_arch=arch,
                      keep_hash=calculate_sha3_384(snap_filename))
 
-    update_metadata(snap_yaml, force_metadata)
+    with _get_icon_from_snap_file(snap_filename) as icon:
+        update_metadata(snap_yaml, icon, force_metadata)
 
     if release_channels:
         release(snap_name, result['revision'], release_channels)

@@ -49,6 +49,11 @@ class PushCommandBaseTestCase(CommandBaseTestCase):
         self.mock_metadata = patcher.start()
         self.addCleanup(patcher.stop)
 
+        patcher = mock.patch.object(
+            storeapi.StoreClient, 'update_binary_metadata')
+        self.mock_binary_metadata = patcher.start()
+        self.addCleanup(patcher.stop)
+
 
 class PushCommandTestCase(PushCommandBaseTestCase):
 
@@ -206,10 +211,12 @@ class PushCommandTestCase(PushCommandBaseTestCase):
         self.assertThat(result.output, Contains(
             "The metadata has been updated"))
         metadata = {
-            'description': 'Description of the most simple snap', 'summary':
-            'Summary of the most simple snap',
+            'description': 'Description of the most simple snap',
+            'summary': 'Summary of the most simple snap',
         }
         self.mock_metadata.assert_called_once_with('basic', metadata, False)
+        # no binary metadata updates (1 call to get the current values only)
+        self.assertEqual(self.mock_binary_metadata.call_count, 1)
 
     def test_push_and_release_a_snap_to_N_channels(self):
         mock_tracker = mock.Mock(storeapi.StatusTracker)
@@ -277,10 +284,12 @@ class PushCommandTestCase(PushCommandBaseTestCase):
         self.assertThat(result.output, Contains(
             "The metadata has been updated"))
         metadata = {
-            'description': 'Description of the most simple snap', 'summary':
-            'Summary of the most simple snap',
+            'description': 'Description of the most simple snap',
+            'summary': 'Summary of the most simple snap',
         }
         self.mock_metadata.assert_called_once_with('basic', metadata, False)
+        # no binary metadata updates (1 call to get the current values only)
+        self.assertEqual(self.mock_binary_metadata.call_count, 1)
 
     def test_push_only_metadata_forced(self):
         patcher = mock.patch.object(storeapi.StoreClient, 'upload')
@@ -297,10 +306,12 @@ class PushCommandTestCase(PushCommandBaseTestCase):
         self.assertThat(result.output, Contains(
             "The metadata has been updated"))
         metadata = {
-            'description': 'Description of the most simple snap', 'summary':
-            'Summary of the most simple snap',
+            'description': 'Description of the most simple snap',
+            'summary': 'Summary of the most simple snap',
         }
         self.mock_metadata.assert_called_once_with('basic', metadata, True)
+        # no binary metadata updates (1 call to get the current values only)
+        self.assertEqual(self.mock_binary_metadata.call_count, 1)
 
     def test_metadata_release_mutually_excluded(self):
         result = self.run_command(
@@ -310,6 +321,103 @@ class PushCommandTestCase(PushCommandBaseTestCase):
         self.assertThat(result.output, Contains('Usage:'))
         self.assertThat(result.output, Contains(
             "--only-metadata and --release are mutually exclusive"))
+
+
+class PushCommandSnapWithIconTestCase(PushCommandBaseTestCase):
+
+    def setUp(self):
+        super().setUp()
+
+        self.snap_file = os.path.join(
+            os.path.dirname(tests.__file__), 'data',
+            'test-snap-with-icon.snap')
+
+        self.icon = None
+
+        def update_binary_metadata(snap_name, metadata, force):
+            self.icon = metadata['icon'].read()
+
+        patcher = mock.patch.object(
+            storeapi.StoreClient, 'update_binary_metadata',
+            side_effect=update_binary_metadata)
+        self.mock_binary_metadata = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def assert_expected_metadata_calls(self, force=False):
+        # text metadata
+        text_metadata = {
+            'description': 'Description of the most simple snap',
+            'summary': 'Summary of the most simple snap',
+        }
+        self.mock_metadata.assert_called_once_with(
+            'basic', text_metadata, force)
+        # binary metadata
+        args, _ = self.mock_binary_metadata.call_args
+        self.assertEqual(args[0], 'basic')
+        expected_icon = (
+            b'<svg width="256" height="256">\n'
+            b'<rect width="256" height="256" style="fill:rgb(0,0,255)" />\n'
+            b'</svg>')
+        self.assertEqual(self.icon, expected_icon)
+        self.assertEqual(args[2], force)
+
+    def test_push_a_snap(self):
+        mock_tracker = mock.Mock(storeapi.StatusTracker)
+        mock_tracker.track.return_value = {
+            'code': 'ready_to_release',
+            'processed': True,
+            'can_release': True,
+            'url': '/fake/url',
+            'revision': 9,
+        }
+        patcher = mock.patch.object(storeapi.StoreClient, 'upload')
+        mock_upload = patcher.start()
+        self.addCleanup(patcher.stop)
+        mock_upload.return_value = mock_tracker
+
+        # Upload
+        with mock.patch('snapcraft.storeapi.StatusTracker') as mock_tracker:
+            result = self.run_command(['push', self.snap_file])
+        self.assertThat(result.exit_code, Equals(0))
+
+        self.assertRegexpMatches(
+            self.fake_logger.output,
+            ".*push '.*test-snap-with-icon.snap' to the store\.\n"
+            "Revision 9 of 'basic' created\.",
+        )
+        mock_upload.assert_called_once_with('basic', self.snap_file)
+        self.assert_expected_metadata_calls(force=False)
+
+    def test_push_only_metadata_simple(self):
+        patcher = mock.patch.object(storeapi.StoreClient, 'upload')
+        mock_upload = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        result = self.run_command(['push', self.snap_file, '--only-metadata'])
+
+        mock_upload.assert_not_called()
+
+        self.assertThat(result.output, Contains(
+            "Updating metadata in the Store (force=False)"))
+        self.assertThat(result.output, Contains(
+            "The metadata has been updated"))
+        self.assert_expected_metadata_calls(force=False)
+
+    def test_push_only_metadata_forced(self):
+        patcher = mock.patch.object(storeapi.StoreClient, 'upload')
+        mock_upload = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        result = self.run_command(
+            ['push', self.snap_file, '--only-metadata', '--force-metadata'])
+
+        mock_upload.assert_not_called()
+
+        self.assertThat(result.output, Contains(
+            "Updating metadata in the Store (force=True)"))
+        self.assertThat(result.output, Contains(
+            "The metadata has been updated"))
+        self.assert_expected_metadata_calls(force=True)
 
 
 class PushCommandDeltasTestCase(PushCommandBaseTestCase):
